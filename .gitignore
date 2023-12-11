@@ -1,52 +1,20 @@
-# Prerequisites
-*.d
+ports/
+source/
 
-# Object files
-*.o
-*.ko
-*.obj
-*.elf
-
-# Linker output
-*.ilk
-*.map
-*.exp
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
-
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
-
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
-
-# Debug files
-*.dSYM/
-*.su
-*.idb
-*.pdb
-
-# Kernel Module Compile Results
-*.mod*
-*.cmd
-.tmp_versions/
-modules.order
-Module.symvers
-Mkfile.old
-dkms.conf
+# app 폴더의 경우 includes.h, lab1.c, Makefile, os_cfg.h만 남기고 나머지는 모두 업로드 하지 않음
+app/lab1.d
+app/lab1.eep
+app/lab1.elf
+app/lab1.hex
+app/lab1.lss
+app/lab1.lst
+app/lab1.map
+app/lab1.o
+app/os_cpu_a.lst
+app/os_cpu_a.o
+app/os_cpu_c.d
+app/os_cpu_c.lst
+app/os_cpu_c.o
+app/ucos_ii.d
+app/ucos_ii.lst
+app/ucos_ii.o
