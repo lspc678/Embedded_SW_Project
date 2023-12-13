@@ -4,8 +4,11 @@
 #include <avr/io.h>
 #include <util/delay.h>
 
-#define N_TASKS 6
+#define N_TASKS 5
 #define TASK_STK_SIZE OS_TASK_DEF_STK_SIZE
+
+#define ON 1
+#define OFF 0
 
 #define CDS_VALUE 871
 #define ATS75_CONFIG_REG 1
@@ -23,9 +26,6 @@ OS_EVENT* mbox_for_temperature_task;
 // Message Queue, calculate_FND_task에서 turn_on_FND_task로 FND에 표시할 값에 대한 배열을 전달할 때 사용
 OS_EVENT* msg_queue_for_calculate_FND_task;
 
-// turn_on_siren_task에 대한 Event Flag (0x01일 경우 경보음이 울림)
-OS_EVENT* event_flag_for_turn_on_siren_task;
-
 void* msg_queue_arr[4];
 
 void init_adc(); // A/D 컨버터 초기화
@@ -38,7 +38,9 @@ void turn_on_LED_task(void* data); // 주변 밝기에 따라 LED를 켜는 Task
 void temperature_task(void* data); // 주변 온도를 측정하는 Task
 void calculate_FND_task(void* data); // FND에 표시할 값을 계산하는 Task
 void turn_on_FND_task(void* data); // FND를 켜는 task
-void turn_on_siren_task(void* data); // 주변 온도가 일정 수준을 넘어섰을 때 경보음을 내는 Task
+
+volatile int turn_on_siren = OFF; // ON일 경우 경보음이 울리는 상태
+volatile int siren_state = OFF;
 
 int main(void)
 {
@@ -58,16 +60,30 @@ int main(void)
 
   init_adc(); // A/D 컨버터 초기화
 
+  // LED 출력 세팅
+  DDRA = 0xFF;
+
   // FND 출력 세팅
 	DDRC = 0xFF;
 	DDRG = 0x0F;
+
+  // 경보음으로 라 음을 냄
+  // 라 음의 주파수는 440hz
+	// 주기: 0.0022초 = 2,272us --> 0, 1의 상태를 각각 1,136us를 유지함
+  DDRB |= 0x10;   // Buzzer를 사용함
+	TCCR1A = 0x00;
+	TCCR1B = 0x03; // 64분주
+	TCCR1C = 0x00;
+	TIMSK |= _BV(OCIE1A);
+	TCNT1 = 0;
+	OCR1A = 284; // 카운터가 284가 되면 타이머/카운터1에 대한 출력비교 인터럽트 ISR이 실행됨
+  sei();
 
   OSTaskCreate(read_adc_task, (void*)0, (void*)&TaskStk[0][TASK_STK_SIZE - 1], 0);
   OSTaskCreate(turn_on_LED_task, (void*)0, (void*)&TaskStk[1][TASK_STK_SIZE - 1], 1);
   OSTaskCreate(temperature_task, (void*)0, (void*)&TaskStk[2][TASK_STK_SIZE - 1], 2);
   OSTaskCreate(calculate_FND_task, (void*)0, (void*)&TaskStk[3][TASK_STK_SIZE - 1], 3);
   OSTaskCreate(turn_on_FND_task, (void*)0, (void*)&TaskStk[4][TASK_STK_SIZE - 1], 4);
-  OSTaskCreate(turn_on_siren_task, (void*)0, (void*)&TaskStk[5][TASK_STK_SIZE - 1], 5);
 
   OSStart();
   return 0;
@@ -112,7 +128,6 @@ void read_adc_task(void* data)
 // 주변 밝기에 따라 LED를 켜는 Task
 void turn_on_LED_task(void* data)
 {
-  DDRA = 0xFF;
   unsigned short read_value;
   unsigned short adc_data_reg_value;
 
@@ -124,6 +139,7 @@ void turn_on_LED_task(void* data)
     if (read_value != (void*)0)
       adc_data_reg_value = read_value;
 
+    // 주변 밝기가 낮아지면 LED를 켬
     if (adc_data_reg_value < CDS_VALUE)
       PORTA = 0xFF;
     else
@@ -246,7 +262,8 @@ void temperature_task(void* data)
 
   while (1)
   {
-    temperature_value = read_temperature();
+    temperature_value = read_temperature(); // 유효 bit 수는 9
+
     OSMboxPost(mbox_for_temperature_task, (void*)&temperature_value);
     OSTimeDlyHMSM(0, 0, 0, 500); // 500ms delay 발생
   }
@@ -277,6 +294,12 @@ void calculate_FND_task(void* data)
     value_int = (unsigned char)((temperature_value & 0x7F00) >> 8);
     value_deci = (unsigned char)(temperature_value & 0x00FF);
 
+    // 주변 온도가 29도 이상일 경우 경보음을 냄
+    if ((num[0] == 11) && (value_int >= 29))
+      turn_on_siren = ON;
+    else
+      turn_on_siren = OFF;
+
     num[1] = value_int / 10;
     num[2] = value_int % 10;
 
@@ -286,7 +309,7 @@ void calculate_FND_task(void* data)
       num[3] = 0;
 
     OSQPost(msg_queue_for_calculate_FND_task, (void*)num);
-    OSTimeDlyHMSM(0, 0, 0, 500); // 500ms delay 발생
+    OSTimeDlyHMSM(0, 0, 0, 250); // 250ms delay 발생
 	}
 }
 
@@ -325,47 +348,29 @@ void turn_on_FND_task(void* data)
         // 소수점 추가
         PORTC |= 0x80;
       }
-      OSTimeDlyHMSM(0, 0, 0, 1); // 500ms delay 발생
+      OSTimeDlyHMSM(0, 0, 0, 1); // 1ms delay 발생
     }
   }
 }
 
-volatile int siren_state = OFF;
-
 // 타이머/카운터1에 대한 출력비교 인터럽트 ISR
 ISR(TIMER1_COMPA_vect)
 {
-	if (siren_state == ON)
-	{
-		PORTB = 0x00;
-		siren_state = OFF;
-	}
-	else
-	{
-		PORTB = 0x10;
-		siren_state = ON;
-	}
-	TCNT1 = 0;
-}
-
-// 주변 온도가 일정 수준을 넘어섰을 때 경보음을 내는 Task
-void turn_on_siren_task(void* data)
-{
-  // 경보음으로 라 음을 냄
-  // 라 음의 주파수는 440hz
-	// 주기: 0.0022초 = 2,272us --> 0, 1의 상태를 각각 1,136us를 유지함
-
-  DDRB = 0x10;   // Buzzer를 사용함
-	TCCR1A = 0x00;
-	TCCR1B = 0x03; // 64분주
-	TCCR1C = 0x00;
-	TIMSK = 1 << OCIE1A;
-	TCNT1 = 0;
-	OCR1A = 284; // 카운터가 284가 되면 타이머/카운터1에 대한 출력비교 인터럽트 ISR이 실행됨
-  sei();
-
-  while (1)
+  if (turn_on_siren == ON)
   {
-
+    // 경보음이 울릴 때는 주변 밝기와 상관없이 LED를 켬
+    PORTA = 0xFF;
+    
+    if (siren_state == ON)
+    {
+      PORTB &= ~0x10;
+      siren_state = OFF;
+    }
+    else
+    {
+      PORTB |= 0x10;
+      siren_state = ON;
+    }
+    TCNT1 = 0;
   }
 }
